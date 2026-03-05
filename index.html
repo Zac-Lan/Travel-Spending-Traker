@@ -110,8 +110,8 @@
       useEffect(() => {
         if (!user) return;
         
-        // 綁定個人的 Trips 集合
-        const tripsRef = window.FirebaseUtils.collection(window.db, 'artifacts', window.appId, 'users', user.uid, 'trips');
+        // 綁定「公開共用」的 Trips 集合 (所有使用者看同一個資料庫)
+        const tripsRef = window.FirebaseUtils.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'trips');
         const unsubscribe = window.FirebaseUtils.onSnapshot(tripsRef, (snapshot) => {
           const tripsData = [];
           snapshot.forEach(doc => tripsData.push(doc.data()));
@@ -207,7 +207,8 @@
 
         if (user) {
           try {
-            const tripRef = window.FirebaseUtils.doc(window.db, 'artifacts', window.appId, 'users', user.uid, 'trips', newTrip.id);
+            // 儲存至公開共用途徑
+            const tripRef = window.FirebaseUtils.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'trips', newTrip.id);
             await window.FirebaseUtils.setDoc(tripRef, newTrip);
           } catch (e) {
             console.error("Error saving trip", e);
@@ -225,7 +226,8 @@
           action: async () => {
             if (user) {
               try {
-                const tripRef = window.FirebaseUtils.doc(window.db, 'artifacts', window.appId, 'users', user.uid, 'trips', id);
+                // 從公開共用途徑刪除
+                const tripRef = window.FirebaseUtils.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'trips', id);
                 await window.FirebaseUtils.deleteDoc(tripRef);
                 if (activeTripId === id) setActiveTripId(null);
               } catch (e) {
@@ -299,7 +301,8 @@
 
         if (user) {
           try {
-            const tripRef = window.FirebaseUtils.doc(window.db, 'artifacts', window.appId, 'users', user.uid, 'trips', activeTripId);
+            // 更新至公開共用途徑
+            const tripRef = window.FirebaseUtils.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'trips', activeTripId);
             await window.FirebaseUtils.setDoc(tripRef, updatedTrip);
           } catch (e) {
             console.error("Error saving participants", e);
@@ -350,7 +353,8 @@
 
         if (user) {
           try {
-            const tripRef = window.FirebaseUtils.doc(window.db, 'artifacts', window.appId, 'users', user.uid, 'trips', activeTripId);
+            // 更新至公開共用途徑
+            const tripRef = window.FirebaseUtils.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'trips', activeTripId);
             await window.FirebaseUtils.setDoc(tripRef, updatedTrip);
           } catch (e) {
             console.error("Error saving expense", e);
@@ -367,7 +371,8 @@
             const updatedTrip = { ...activeTrip, expenses: activeTrip.expenses.filter(e => e.id !== expenseId) };
             if (user) {
               try {
-                const tripRef = window.FirebaseUtils.doc(window.db, 'artifacts', window.appId, 'users', user.uid, 'trips', activeTripId);
+                // 更新至公開共用途徑
+                const tripRef = window.FirebaseUtils.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'trips', activeTripId);
                 await window.FirebaseUtils.setDoc(tripRef, updatedTrip);
               } catch (e) {
                 console.error("Error deleting expense", e);
@@ -921,28 +926,41 @@
 
     // 檢查環境變數並初始化 Firebase 與 React
     const renderApp = () => {
-      // 為了在測試環境中能順利運作，已幫您恢復為預設的自動載入設定
-      // 當您要正式放到自己的主機時，再將這裡替換成您的 Firebase config 即可
-      let firebaseConfig = {
-        apiKey: "AIzaSyCauUYMMq70Nadu4ahrTBkg5WQ0y5xjN98",
-        authDomain: "travel-db-479f6.firebaseapp.com",
-        projectId: "travel-db-479f6",
-        storageBucket: "travel-db-479f6.firebasestorage.app",
-        messagingSenderId: "492993282647",
-        appId: "1:492993282647:web:6cc1036ed3bda5c40bd912"
-      };
-      try {
-        if (typeof __firebase_config !== 'undefined') {
-          firebaseConfig = JSON.parse(__firebase_config);
+      // ==========================================
+      // ⚠️ 部署到您自己的網站 (如 GitHub Pages) 時：
+      // 1. 將 isCustomDeploy 設為 true
+      // 2. 填入您自己的 Firebase 設定
+      // ==========================================
+      const isCustomDeploy = true; 
+
+      let firebaseConfig;
+
+      if (isCustomDeploy) {
+        // 請填入您的 Firebase 設定 (從 Firebase 控制台的「專案設定」取得)
+        firebaseConfig = {
+          apiKey: "AIzaSyCauUYMMq70Nadu4ahrTBkg5WQ0y5xjN98",
+          authDomain: "travel-db-479f6.firebaseapp.com",
+          projectId: "travel-db-479f6",
+          storageBucket: "travel-db-479f6.firebasestorage.app",
+          messagingSenderId: "492993282647",
+          appId: "1:492993282647:web:6cc1036ed3bda5c40bd912"
+        };
+      } else {
+        // 預覽環境使用的自動設定
+        firebaseConfig = { projectId: "demo" };
+        try {
+          if (typeof __firebase_config !== 'undefined') {
+            firebaseConfig = JSON.parse(__firebase_config);
+          }
+        } catch (e) {
+          console.error("Parse config error", e);
         }
-      } catch (e) {
-        console.error("Parse config error", e);
       }
       
       const app = window.FirebaseUtils.initializeApp(firebaseConfig);
       window.auth = window.FirebaseUtils.getAuth(app);
       window.db = window.FirebaseUtils.getFirestore(app);
-      window.appId = typeof __app_id !== 'undefined' ? __app_id : 'my-travel-tracker';
+      window.appId = typeof __app_id !== 'undefined' && !isCustomDeploy ? __app_id : 'my-travel-tracker';
 
       const root = ReactDOM.createRoot(document.getElementById('root'));
       root.render(<TravelExpenseTracker />);
