@@ -73,16 +73,19 @@
       // 彈出視窗狀態
       const [isTripModalOpen, setIsTripModalOpen] = useState(false);
       const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
-      const [isParticipantModalOpen, setIsParticipantModalOpen] = useState(false);
+      const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+      const [isEditTripNameModalOpen, setIsEditTripNameModalOpen] = useState(false);
       
       // 全域訊息狀態 (取代原生的 alert 與 confirm)
       const [alertMessage, setAlertMessage] = useState('');
       const [confirmAction, setConfirmAction] = useState(null);
 
       // 表單狀態
-      const [tripForm, setTripForm] = useState({ name: '', currencies: ['TWD'], participants: [''] });
+      const [tripForm, setTripForm] = useState({ name: '', currencies: ['TWD'], peopleCount: 1, payers: [''] });
       const [expenseForm, setExpenseForm] = useState({ id: null, name: '', amount: '', currency: 'TWD', payer: '', date: '', category: '飲食' });
-      const [editingParticipants, setEditingParticipants] = useState([]);
+      const [editingPayers, setEditingPayers] = useState([]);
+      const [editPeopleCount, setEditPeopleCount] = useState(1);
+      const [editTripName, setEditTripName] = useState('');
 
       // --- Firebase 初始化與資料監聽 ---
       useEffect(() => {
@@ -114,7 +117,15 @@
         const tripsRef = window.FirebaseUtils.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'trips');
         const unsubscribe = window.FirebaseUtils.onSnapshot(tripsRef, (snapshot) => {
           const tripsData = [];
-          snapshot.forEach(doc => tripsData.push(doc.data()));
+          snapshot.forEach(doc => {
+            const data = doc.data();
+            // 向後相容舊資料：將原本的 participants 轉換為新的 payers 與 peopleCount
+            if (data.participants && !data.payers) {
+              data.payers = data.participants;
+              data.peopleCount = data.participants.length;
+            }
+            tripsData.push(data);
+          });
           // 依照 ID (時間戳) 降序排序，最新的旅程在最上方
           tripsData.sort((a, b) => Number(b.id) - Number(a.id));
           setTrips(tripsData);
@@ -138,7 +149,7 @@
           const total = activeTrip.expenses
             .filter(e => e.currency === curr)
             .reduce((sum, exp) => sum + Number(exp.amount), 0);
-          const average = activeTrip.participants.length > 0 ? total / activeTrip.participants.length : 0;
+          const average = activeTrip.peopleCount > 0 ? total / activeTrip.peopleCount : 0;
           stats[curr] = { total, average };
         });
         return stats;
@@ -158,20 +169,20 @@
       };
 
       // --- 旅程相關操作 ---
-      const handleAddParticipant = () => {
-        setTripForm({ ...tripForm, participants: [...tripForm.participants, ''] });
+      const handleAddPayer = () => {
+        setTripForm({ ...tripForm, payers: [...tripForm.payers, ''] });
       };
 
-      const handleParticipantChange = (index, value) => {
-        const newParticipants = [...tripForm.participants];
-        newParticipants[index] = value;
-        setTripForm({ ...tripForm, participants: newParticipants });
+      const handlePayerChange = (index, value) => {
+        const newPayers = [...tripForm.payers];
+        newPayers[index] = value;
+        setTripForm({ ...tripForm, payers: newPayers });
       };
 
-      const handleRemoveParticipant = (index) => {
-        if (tripForm.participants.length <= 1) return;
-        const newParticipants = tripForm.participants.filter((_, i) => i !== index);
-        setTripForm({ ...tripForm, participants: newParticipants });
+      const handleRemovePayer = (index) => {
+        if (tripForm.payers.length <= 1) return;
+        const newPayers = tripForm.payers.filter((_, i) => i !== index);
+        setTripForm({ ...tripForm, payers: newPayers });
       };
 
       const toggleCurrency = (currency) => {
@@ -191,9 +202,9 @@
           setAlertMessage('請輸入旅程名稱');
           return;
         }
-        const validParticipants = tripForm.participants.filter(p => p.trim() !== '');
-        if (validParticipants.length === 0) {
-          setAlertMessage('請至少設定一位參與者');
+        const validPayers = tripForm.payers.filter(p => p.trim() !== '');
+        if (validPayers.length === 0) {
+          setAlertMessage('請至少設定一位付款人員');
           return;
         }
 
@@ -201,7 +212,8 @@
           id: Date.now().toString(),
           name: tripForm.name,
           currencies: tripForm.currencies,
-          participants: validParticipants,
+          peopleCount: Number(tripForm.peopleCount) || 1,
+          payers: validPayers,
           expenses: []
         };
 
@@ -217,7 +229,7 @@
         }
 
         setIsTripModalOpen(false);
-        setTripForm({ name: '', currencies: ['TWD'], participants: [''] });
+        setTripForm({ name: '', currencies: ['TWD'], peopleCount: 1, payers: [''] });
       };
 
       const deleteTrip = (id) => {
@@ -238,48 +250,74 @@
         });
       };
 
-      // --- 參與者管理相關操作 ---
-      const openParticipantModal = () => {
-        // 紀錄原始名稱以便後續比對修改
-        setEditingParticipants(activeTrip.participants.map(p => ({ original: p, current: p })));
-        setIsParticipantModalOpen(true);
+      const openEditTripNameModal = () => {
+        setEditTripName(activeTrip.name);
+        setIsEditTripNameModalOpen(true);
       };
 
-      const handleEditParticipantChange = (index, value) => {
-        const newP = [...editingParticipants];
+      const saveTripName = async () => {
+        if (!editTripName.trim()) {
+          setAlertMessage('請輸入旅程名稱');
+          return;
+        }
+        
+        const updatedTrip = { ...activeTrip, name: editTripName.trim() };
+
+        if (user) {
+          try {
+            const tripRef = window.FirebaseUtils.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'trips', activeTripId);
+            await window.FirebaseUtils.setDoc(tripRef, updatedTrip);
+          } catch (e) {
+            console.error("Error updating trip name", e);
+            setAlertMessage("儲存失敗");
+          }
+        }
+        
+        setIsEditTripNameModalOpen(false);
+      };
+
+      // --- 旅程設定(人數與付款人)相關操作 ---
+      const openSettingsModal = () => {
+        setEditingPayers(activeTrip.payers.map(p => ({ original: p, current: p })));
+        setEditPeopleCount(activeTrip.peopleCount);
+        setIsSettingsModalOpen(true);
+      };
+
+      const handleEditPayerChange = (index, value) => {
+        const newP = [...editingPayers];
         newP[index].current = value;
-        setEditingParticipants(newP);
+        setEditingPayers(newP);
       };
 
-      const handleAddEditParticipant = () => {
-        setEditingParticipants([...editingParticipants, { original: null, current: '' }]);
+      const handleAddEditPayer = () => {
+        setEditingPayers([...editingPayers, { original: null, current: '' }]);
       };
 
-      const handleRemoveEditParticipant = (index) => {
-        if (editingParticipants.length <= 1) {
-          setAlertMessage('至少需要一名參與者');
+      const handleRemoveEditPayer = (index) => {
+        if (editingPayers.length <= 1) {
+          setAlertMessage('至少需要一名付款人員');
           return;
         }
-        const newP = editingParticipants.filter((_, i) => i !== index);
-        setEditingParticipants(newP);
+        const newP = editingPayers.filter((_, i) => i !== index);
+        setEditingPayers(newP);
       };
 
-      const saveParticipants = async () => {
-        const validParticipants = editingParticipants.filter(p => p.current.trim() !== '');
-        if (validParticipants.length === 0) {
-          setAlertMessage('請至少設定一位參與者');
+      const saveSettings = async () => {
+        const validPayers = editingPayers.filter(p => p.current.trim() !== '');
+        if (validPayers.length === 0) {
+          setAlertMessage('請至少設定一位付款人員');
           return;
         }
 
-        const names = validParticipants.map(p => p.current.trim());
+        const names = validPayers.map(p => p.current.trim());
         if (new Set(names).size !== names.length) {
-          setAlertMessage('參與者名稱不能重複');
+          setAlertMessage('付款人員名稱不能重複');
           return;
         }
 
         // 建立名稱變更對應表
         const nameMap = {};
-        validParticipants.forEach(p => {
+        validPayers.forEach(p => {
           if (p.original && p.original !== p.current.trim()) {
             nameMap[p.original] = p.current.trim();
           }
@@ -295,7 +333,8 @@
 
         const updatedTrip = {
           ...activeTrip,
-          participants: names,
+          peopleCount: Number(editPeopleCount) || 1,
+          payers: names,
           expenses: updatedExpenses
         };
 
@@ -305,11 +344,11 @@
             const tripRef = window.FirebaseUtils.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'trips', activeTripId);
             await window.FirebaseUtils.setDoc(tripRef, updatedTrip);
           } catch (e) {
-            console.error("Error saving participants", e);
+            console.error("Error saving settings", e);
           }
         }
         
-        setIsParticipantModalOpen(false);
+        setIsSettingsModalOpen(false);
       };
 
       // --- 消費明細相關操作 ---
@@ -322,7 +361,7 @@
             name: '', 
             amount: '', 
             currency: activeTrip.currencies[0] || 'TWD', // 預設使用旅程的第一個幣值
-            payer: activeTrip.participants[0] || '', 
+            payer: activeTrip.payers[0] || '', 
             date: new Date().toISOString().split('T')[0], 
             category: '飲食' 
           });
@@ -486,7 +525,7 @@
                         <div className="flex flex-col gap-2 text-sm text-gray-600 flex-1">
                           <div className="flex items-center gap-2">
                             <Users size={16} className="text-gray-400" />
-                            <span>{trip.participants.length} 人參與</span>
+                            <span>{trip.peopleCount} 人參與</span>
                           </div>
                           <div className="flex items-start gap-2">
                             <DollarSign size={16} className="text-gray-400 mt-0.5 flex-shrink-0" />
@@ -560,24 +599,34 @@
                       </div>
                     </div>
                     <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">旅程人數 (用於計算平均分攤)</label>
+                      <input 
+                        type="number" 
+                        min="1"
+                        value={tripForm.peopleCount}
+                        onChange={(e) => setTripForm({...tripForm, peopleCount: e.target.value})}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-4 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1 flex justify-between items-center">
-                        <span>參與者名稱</span>
-                        <span className="text-xs text-gray-500 font-normal">共 {tripForm.participants.length} 人</span>
+                        <span>付款人員名單 (用於記帳選擇)</span>
+                        <span className="text-xs text-gray-500 font-normal">共 {tripForm.payers.length} 人</span>
                       </label>
                       <div className="space-y-2 max-h-40 overflow-y-auto p-1">
-                        {tripForm.participants.map((participant, index) => (
+                        {tripForm.payers.map((payer, index) => (
                           <div key={index} className="flex gap-2">
                             <input 
                               type="text" 
-                              value={participant}
-                              onChange={(e) => handleParticipantChange(index, e.target.value)}
-                              placeholder={`成員 ${index + 1}`}
+                              value={payer}
+                              onChange={(e) => handlePayerChange(index, e.target.value)}
+                              placeholder={`付款人 ${index + 1}`}
                               className="flex-1 border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                             />
                             <button 
-                              onClick={() => handleRemoveParticipant(index)}
+                              onClick={() => handleRemovePayer(index)}
                               className="p-2 text-gray-400 hover:text-red-500 disabled:opacity-30"
-                              disabled={tripForm.participants.length <= 1}
+                              disabled={tripForm.payers.length <= 1}
                             >
                               <Trash2 size={18} />
                             </button>
@@ -585,10 +634,10 @@
                         ))}
                       </div>
                       <button 
-                        onClick={handleAddParticipant}
+                        onClick={handleAddPayer}
                         className="mt-2 text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1 font-medium"
                       >
-                        <Plus size={16} /> 新增參與者
+                        <Plus size={16} /> 新增付款人員
                       </button>
                     </div>
                   </div>
@@ -623,13 +672,22 @@
             <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
               <button 
                 onClick={() => setActiveTripId(null)}
-                className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
+                className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors flex-shrink-0"
               >
                 <ArrowLeft size={20} />
-                <span className="font-medium hidden sm:inline">返回列表</span>
+                <span className="font-medium hidden sm:inline">返回</span>
               </button>
-              <h1 className="text-xl font-bold text-gray-800 truncate px-4">{activeTrip.name}</h1>
-              <div className="w-8"></div> {/* 平衡用 */}
+              <div className="flex items-center justify-center gap-2 overflow-hidden px-2">
+                <h1 className="text-xl font-bold text-gray-800 truncate">{activeTrip.name}</h1>
+                <button 
+                  onClick={openEditTripNameModal} 
+                  className="text-gray-400 hover:text-blue-600 transition-colors p-1"
+                  title="修改旅程名稱"
+                >
+                  <Edit2 size={16} />
+                </button>
+              </div>
+              <div className="w-8 sm:w-16 flex-shrink-0"></div> {/* 平衡用 */}
             </div>
           </div>
 
@@ -648,7 +706,7 @@
                     <div className="pl-4">
                       <p className="text-blue-100 text-xs font-medium mb-1 flex items-center gap-1">
                         <span>平均每人 ({curr})</span>
-                        <span className="text-[10px] opacity-70">/{activeTrip.participants.length}人</span>
+                        <span className="text-[10px] opacity-70">/{activeTrip.peopleCount}人</span>
                       </p>
                       <div className="flex items-baseline gap-1">
                         <span className="text-2xl sm:text-3xl font-bold truncate">{Math.round(stat.average).toLocaleString()}</span>
@@ -660,12 +718,12 @@
               <div className="mt-5 pt-4 border-t border-white/20 text-sm text-blue-100 flex items-center justify-between pb-1">
                 <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap">
                   <Users size={16} />
-                  參與者：{activeTrip.participants.join(', ')}
+                  付款人員：{activeTrip.payers.join(', ')}
                 </div>
                 <button 
-                  onClick={openParticipantModal}
+                  onClick={openSettingsModal}
                   className="p-1.5 bg-white/10 hover:bg-white/20 rounded-lg transition-colors flex-shrink-0"
-                  title="管理參與者"
+                  title="管理旅程設定"
                 >
                   <Edit2 size={14} />
                 </button>
@@ -803,7 +861,7 @@
                       className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white"
                     >
                       <option value="" disabled>請選擇支出人</option>
-                      {activeTrip.participants.map(p => (
+                      {activeTrip.payers.map(p => (
                         <option key={p} value={p}>{p}</option>
                       ))}
                     </select>
@@ -852,40 +910,93 @@
             </div>
           )}
 
-          {/* 管理參與者 Modal */}
-          {isParticipantModalOpen && (
+          {/* 修改旅程名稱 Modal */}
+          {isEditTripNameModalOpen && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
               <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
                 <div className="p-5 border-b flex justify-between items-center bg-gray-50 flex-shrink-0">
-                  <h3 className="text-lg font-bold text-gray-800">管理參與者</h3>
-                  <button onClick={() => setIsParticipantModalOpen(false)} className="text-gray-400 hover:text-gray-600">
+                  <h3 className="text-lg font-bold text-gray-800">修改旅程名稱</h3>
+                  <button onClick={() => setIsEditTripNameModalOpen(false)} className="text-gray-400 hover:text-gray-600">
                     <X size={20} />
                   </button>
                 </div>
                 
                 <div className="p-5 space-y-4 overflow-y-auto">
-                  <div className="bg-blue-50 text-blue-700 p-3 rounded-lg text-sm mb-2">
-                    💡 修改名稱會自動更新該成員已建立的消費明細。若刪除成員，該成員原有的消費明細會保留原名稱。
-                  </div>
                   <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">旅程名稱</label>
+                    <input 
+                      type="text" 
+                      value={editTripName}
+                      onChange={(e) => setEditTripName(e.target.value)}
+                      placeholder="請輸入旅程名稱"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="p-5 border-t bg-gray-50 flex justify-end gap-3 flex-shrink-0">
+                  <button 
+                    onClick={() => setIsEditTripNameModalOpen(false)}
+                    className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors"
+                  >
+                    取消
+                  </button>
+                  <button 
+                    onClick={saveTripName}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm transition-colors"
+                  >
+                    儲存變更
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 管理旅程設定 Modal */}
+          {isSettingsModalOpen && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
+                <div className="p-5 border-b flex justify-between items-center bg-gray-50 flex-shrink-0">
+                  <h3 className="text-lg font-bold text-gray-800">管理旅程設定</h3>
+                  <button onClick={() => setIsSettingsModalOpen(false)} className="text-gray-400 hover:text-gray-600">
+                    <X size={20} />
+                  </button>
+                </div>
+                
+                <div className="p-5 space-y-5 overflow-y-auto">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">旅程人數 (用於計算平均分攤)</label>
+                    <input 
+                      type="number" 
+                      min="1"
+                      value={editPeopleCount}
+                      onChange={(e) => setEditPeopleCount(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
+                  
+                  <div className="border-t pt-4">
                     <label className="block text-sm font-medium text-gray-700 mb-2 flex justify-between items-center">
-                      <span>參與者名單</span>
-                      <span className="text-xs text-gray-500 font-normal">共 {editingParticipants.length} 人</span>
+                      <span>付款人員名單</span>
+                      <span className="text-xs text-gray-500 font-normal">共 {editingPayers.length} 人</span>
                     </label>
+                    <div className="bg-blue-50 text-blue-700 p-3 rounded-lg text-xs mb-3">
+                      💡 修改名稱會自動更新該成員已建立的消費明細。若刪除成員，該成員原有的消費明細會保留原名稱。
+                    </div>
                     <div className="space-y-2">
-                      {editingParticipants.map((participant, index) => (
+                      {editingPayers.map((payer, index) => (
                         <div key={index} className="flex gap-2">
                           <input 
                             type="text" 
-                            value={participant.current}
-                            onChange={(e) => handleEditParticipantChange(index, e.target.value)}
-                            placeholder={`成員 ${index + 1}`}
+                            value={payer.current}
+                            onChange={(e) => handleEditPayerChange(index, e.target.value)}
+                            placeholder={`付款人 ${index + 1}`}
                             className="flex-1 border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                           />
                           <button 
-                            onClick={() => handleRemoveEditParticipant(index)}
+                            onClick={() => handleRemoveEditPayer(index)}
                             className="p-2 text-gray-400 hover:text-red-500 disabled:opacity-30"
-                            disabled={editingParticipants.length <= 1}
+                            disabled={editingPayers.length <= 1}
                           >
                             <Trash2 size={18} />
                           </button>
@@ -893,23 +1004,23 @@
                       ))}
                     </div>
                     <button 
-                      onClick={handleAddEditParticipant}
+                      onClick={handleAddEditPayer}
                       className="mt-3 text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1 font-medium"
                     >
-                      <Plus size={16} /> 新增參與者
+                      <Plus size={16} /> 新增付款人員
                     </button>
                   </div>
                 </div>
 
                 <div className="p-5 border-t bg-gray-50 flex justify-end gap-3 flex-shrink-0">
                   <button 
-                    onClick={() => setIsParticipantModalOpen(false)}
+                    onClick={() => setIsSettingsModalOpen(false)}
                     className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors"
                   >
                     取消
                   </button>
                   <button 
-                    onClick={saveParticipants}
+                    onClick={saveSettings}
                     className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm transition-colors"
                   >
                     儲存變更
